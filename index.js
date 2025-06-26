@@ -1,8 +1,11 @@
 const express = require("express");
 const cors = require("cors");
 const dotenv = require("dotenv");
-const { MongoClient, ServerApiVersion } = require("mongodb");
+const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
 dotenv.config();
+
+const stripe = require('stripe')(process.env.PAYMENT_GATEWAY_KEY)
+
 const app = express();
 const port = process.env.PORT || 3000;
 
@@ -60,6 +63,30 @@ async function run() {
         res.status(500).send({ error: "Failed to fetch parcels." });
       }
     });
+
+    app.get("/parcels/:id", async(req, res) =>{
+      const id = req.params.id;
+      const parcel = await parcelCollection.findOne({_id:new ObjectId(id)})
+      res.send(parcel)
+    })
+
+    app.delete("/parcels/:id", async (req, res) => {
+      const id = req.params.id;
+      const result = await parcelCollection.deleteOne({
+        _id: new ObjectId(id),
+      });
+      res.send(result);
+    });
+
+    app.post('/create-payment-intent', async(req, res)=>{
+      const amountInCents = req.body.amountInCents
+      const paymentIntent = await stripe.paymentIntents.create({
+        amount: amountInCents, // amount in cents
+        currency: 'usd',
+        payment_method_types: ['card']
+      })
+      res.json({clientSecret: paymentIntent.client_secret})
+    })
 
     // Send a ping to confirm a successful connection
     await client.db("admin").command({ ping: 1 });
