@@ -28,8 +28,21 @@ async function run() {
   try {
     await client.connect();
 
+    const usersCollection = client.db("parcelDB").collection("users")
     const parcelCollection = client.db("parcelDB").collection("parcels");
     const paymentsCollection = client.db("parcelDB").collection("payments");
+
+    // users 
+    app.post('/users', async(req, res) =>{
+      const email = req.body.email;
+      const userExists = await usersCollection.findOne({ email })
+      
+      if(userExists) return res.status(200).send({message: "user already exists", inserted: false})
+
+        const user = req.body;
+        const result = await usersCollection.insertOne(user);
+        res.send(result)
+    })
 
     app.post("/parcels", async (req, res) => {
       const parcel = req.body;
@@ -80,6 +93,21 @@ async function run() {
       const result = await parcelCollection.deleteOne({
         _id: new ObjectId(id),
       });
+      res.send(result);
+    });
+
+    app.post("/tracking", async (req, res) => {
+      const { trackingId, parcelId, status, location } = req.body;
+
+      const newEntry = {
+        trackingId,
+        parcelId: new ObjectId(parcelId),
+        status,
+        location,
+        time: new Date(),
+      };
+
+      const result = await trackingCollection.insertOne(newEntry);
       res.send(result);
     });
 
