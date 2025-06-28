@@ -13,6 +13,12 @@ const port = process.env.PORT || 3000;
 app.use(cors());
 app.use(express.json());
 
+const serviceAccount = require("./firebase-admin-key.json");
+
+admin.initializeApp({
+  credential: admin.credential.cert(serviceAccount),
+});
+
 const uri = `mongodb+srv://${process.env.DB_USER}:${process.env.DB_PASS}@cluster0.zc7c13h.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0`;
 
 // Create a MongoClient with a MongoClientOptions object to set the Stable API version
@@ -28,21 +34,45 @@ async function run() {
   try {
     await client.connect();
 
-    const usersCollection = client.db("parcelDB").collection("users")
+    const usersCollection = client.db("parcelDB").collection("users");
     const parcelCollection = client.db("parcelDB").collection("parcels");
     const paymentsCollection = client.db("parcelDB").collection("payments");
+    const ridersCollection = client.db("parcelDB").collection("riders");
 
-    // users 
-    app.post('/users', async(req, res) =>{
+    // custom middleware
+    const verifyFireBaseToken = async (req, res, next) => {
+      const authHeader = req.header.Authorization;
+      if (!authHeader)
+        return res.status(401).send({ message: "unauthorized access" });
+
+      const token = authHeader.split(" ")[1];
+      if (!token)
+        return res.status(401).send({ message: "unauthorized access" });
+
+      // verify token
+      try {
+        const decoded = await admin.auth().verifyIdToken(token);
+        req.decoded = decoded;
+        next();
+      } catch {
+        return res.status(403).send({ message: "forbidden access" });
+      }
+    };
+
+    // users
+    app.post("/users", async (req, res) => {
       const email = req.body.email;
-      const userExists = await usersCollection.findOne({ email })
-      
-      if(userExists) return res.status(200).send({message: "user already exists", inserted: false})
+      const userExists = await usersCollection.findOne({ email });
 
-        const user = req.body;
-        const result = await usersCollection.insertOne(user);
-        res.send(result)
-    })
+      if (userExists)
+        return res
+          .status(200)
+          .send({ message: "user already exists", inserted: false });
+
+      const user = req.body;
+      const result = await usersCollection.insertOne(user);
+      res.send(result);
+    });
 
     app.post("/parcels", async (req, res) => {
       const parcel = req.body;
@@ -96,6 +126,26 @@ async function run() {
       res.send(result);
     });
 
+    // riders
+    app.post("/riders", async (req, res) => {
+      const rider = req.body;
+      const result = await ridersCollection.insertOne(rider);
+      res.send(result);
+    });
+
+    // GET all riders with status 'pending'
+    app.get("/riders/pending", async (req, res) => {
+      try {
+        const pendingRiders = await ridersCollection
+          .find({ status: "pending" })
+          .toArray();
+        res.send(pendingRiders);
+      } catch (error) {
+        console.error("Error fetching pending riders:", error);
+        res.status(500).send({ message: "Internal server error" });
+      }
+    });
+
     app.post("/tracking", async (req, res) => {
       const { trackingId, parcelId, status, location } = req.body;
 
@@ -111,10 +161,14 @@ async function run() {
       res.send(result);
     });
 
-    app.get("/payments", async (req, res) => {
+    app.get("/payments", verifyFireBaseToken, async (req, res) => {
       const email = req.query.email;
 
       if (!email) return res.status(400).send({ error: "Email is required" });
+
+      console.log("decoded ----------->", req.decoded);
+      if (req.decoded.email !== email)
+        return res.status(403).send({ message: "forbidden access" });
 
       try {
         const history = await paymentsCollection
