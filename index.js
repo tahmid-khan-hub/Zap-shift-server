@@ -1,6 +1,8 @@
 const express = require("express");
 const cors = require("cors");
 const dotenv = require("dotenv");
+const admin = require("firebase-admin");
+
 const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
 dotenv.config();
 
@@ -74,6 +76,7 @@ async function run() {
       res.send(result);
     });
 
+    // parcels
     app.post("/parcels", async (req, res) => {
       const parcel = req.body;
 
@@ -146,6 +149,27 @@ async function run() {
       }
     });
 
+    app.patch("/riders/:id/status", async (req, res) => {
+      const { id } = req.params;
+      const { status } = req.body;
+      const result = await ridersCollection.updateOne(
+        { _id: new ObjectId(id) },
+        { $set: { status } }
+      );
+      res.send(result);
+    });
+
+    // GET active riders
+    app.get("/riders/active", async (req, res) => {
+      const result = await ridersCollection
+        .find({ status: "approved" })
+        .toArray();
+      res.send(result);
+    });
+
+    
+
+    // tracking
     app.post("/tracking", async (req, res) => {
       const { trackingId, parcelId, status, location } = req.body;
 
@@ -161,6 +185,7 @@ async function run() {
       res.send(result);
     });
 
+    // payments
     app.get("/payments", verifyFireBaseToken, async (req, res) => {
       const email = req.query.email;
 
@@ -213,6 +238,7 @@ async function run() {
       }
     });
 
+    // credit card intent
     app.post("/create-payment-intent", async (req, res) => {
       const amountInCents = req.body.amountInCents;
       const paymentIntent = await stripe.paymentIntents.create({
