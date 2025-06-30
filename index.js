@@ -61,6 +61,16 @@ async function run() {
       }
     };
 
+    const verifyAdmin = async(req, res, next) => {
+      const email = req.decoded.email;
+      const query = { email }
+      const user = await usersCollection.findOne(query)
+
+      if(!user || user.role !== 'admin') return res.status(403).send({message: 'forbidden access'})
+
+      next()
+    }
+
     // users
     app.post("/users", async (req, res) => {
       const email = req.body.email;
@@ -96,7 +106,7 @@ async function run() {
       res.send(result);
     });
 
-    app.patch("/user/:id/role", async (req, res) => {
+    app.patch("/user/:id/role", verifyFireBaseToken, verifyAdmin, async (req, res) => {
       const { id } = req.params;
       const { role } = req.body;
 
@@ -183,7 +193,7 @@ async function run() {
     });
 
     // GET all riders with status 'pending'
-    app.get("/riders/pending", async (req, res) => {
+    app.get("/riders/pending", verifyFireBaseToken , verifyAdmin, async (req, res) => {
       try {
         const pendingRiders = await ridersCollection
           .find({ status: "pending" })
@@ -220,7 +230,7 @@ async function run() {
     });
 
     // GET active riders
-    app.get("/riders/active", async (req, res) => {
+    app.get("/riders/active", verifyFireBaseToken, verifyAdmin, async (req, res) => {
       const result = await ridersCollection
         .find({ status: "approved" })
         .toArray();
