@@ -76,6 +76,52 @@ async function run() {
       res.send(result);
     });
 
+    app.get('/users/:email/role', async(req, res) => {
+      const email = req.params.email;
+      const user = await usersCollection.findOne({email});
+      res.send({role: user.role || 'user'})
+    })
+
+    app.get("/users/search", async (req, res) => {
+      const { email } = req.query;
+      if (!email)
+        return res.status(400).json({ message: "Email query is required" });
+
+      const result = await usersCollection
+        .find({ email: { $regex: email, $options: "i" } }) // case-insensitive partial match
+        .project({ email: 1, created_at: 1, role: 1 }) // show only selected fields
+        .limit(10)
+        .toArray();
+
+      res.send(result);
+    });
+
+    app.patch("/user/:id/role", async (req, res) => {
+      const { id } = req.params;
+      const { role } = req.body;
+
+      // Validate role
+      if (!["admin", "user"].includes(role)) {
+        return res
+          .status(400)
+          .json({ message: "Invalid role. Only 'admin' or 'user' allowed." });
+      }
+
+      try {
+        const result = await usersCollection.updateOne(
+          { _id: new ObjectId(id) },
+          { $set: { role } }
+        );
+
+        res.json({ message: `User role updated to '${role}'`, result });
+      } catch (error) {
+        res.status(500).json({ message: "Server error", error: error.message });
+      }
+    });
+
+
+
+
     // parcels
     app.post("/parcels", async (req, res) => {
       const parcel = req.body;
@@ -151,11 +197,25 @@ async function run() {
 
     app.patch("/riders/:id/status", async (req, res) => {
       const { id } = req.params;
-      const { status } = req.body;
+      const { status, email } = req.body;
       const result = await ridersCollection.updateOne(
         { _id: new ObjectId(id) },
         { $set: { status } }
       );
+
+      // update user role for accepting rider
+      if (status === "approved") {
+        const useQuery = { email };
+        const userUpdatedDoc = {
+          $set: { role: "rider" },
+        };
+
+        const roleResult = await usersCollection.updateOne(
+          useQuery,
+          userUpdatedDoc
+        );
+        console.log(roleResult.modifiedCount);
+      }
       res.send(result);
     });
 
@@ -166,8 +226,6 @@ async function run() {
         .toArray();
       res.send(result);
     });
-
-    
 
     // tracking
     app.post("/tracking", async (req, res) => {
