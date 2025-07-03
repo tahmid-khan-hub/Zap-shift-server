@@ -41,9 +41,9 @@ async function run() {
     const paymentsCollection = client.db("parcelDB").collection("payments");
     const ridersCollection = client.db("parcelDB").collection("riders");
 
-    // custom middleware
     const verifyFireBaseToken = async (req, res, next) => {
-      const authHeader = req.header.Authorization;
+      const authHeader = req.headers.authorization;
+
       if (!authHeader)
         return res.status(401).send({ message: "unauthorized access" });
 
@@ -51,25 +51,25 @@ async function run() {
       if (!token)
         return res.status(401).send({ message: "unauthorized access" });
 
-      // verify token
       try {
         const decoded = await admin.auth().verifyIdToken(token);
         req.decoded = decoded;
         next();
-      } catch {
+      } catch (err) {
         return res.status(403).send({ message: "forbidden access" });
       }
     };
 
-    const verifyAdmin = async(req, res, next) => {
+    const verifyAdmin = async (req, res, next) => {
       const email = req.decoded.email;
-      const query = { email }
-      const user = await usersCollection.findOne(query)
+      const query = { email };
+      const user = await usersCollection.findOne(query);
 
-      if(!user || user.role !== 'admin') return res.status(403).send({message: 'forbidden access'})
+      if (!user || user.role !== "admin")
+        return res.status(403).send({ message: "forbidden access" });
 
-      next()
-    }
+      next();
+    };
 
     // users
     app.post("/users", async (req, res) => {
@@ -86,11 +86,11 @@ async function run() {
       res.send(result);
     });
 
-    app.get('/users/:email/role', async(req, res) => {
+    app.get("/users/:email/role", async (req, res) => {
       const email = req.params.email;
-      const user = await usersCollection.findOne({email});
-      res.send({role: user.role || 'user'})
-    })
+      const user = await usersCollection.findOne({ email });
+      res.send({ role: user.role || "user" });
+    });
 
     app.get("/users/search", async (req, res) => {
       const { email } = req.query;
@@ -106,31 +106,35 @@ async function run() {
       res.send(result);
     });
 
-    app.patch("/user/:id/role", verifyFireBaseToken, verifyAdmin, async (req, res) => {
-      const { id } = req.params;
-      const { role } = req.body;
+    app.patch(
+      "/user/:id/role",
+      verifyFireBaseToken,
+      verifyAdmin,
+      async (req, res) => {
+        const { id } = req.params;
+        const { role } = req.body;
 
-      // Validate role
-      if (!["admin", "user"].includes(role)) {
-        return res
-          .status(400)
-          .json({ message: "Invalid role. Only 'admin' or 'user' allowed." });
+        // Validate role
+        if (!["admin", "user"].includes(role)) {
+          return res
+            .status(400)
+            .json({ message: "Invalid role. Only 'admin' or 'user' allowed." });
+        }
+
+        try {
+          const result = await usersCollection.updateOne(
+            { _id: new ObjectId(id) },
+            { $set: { role } }
+          );
+
+          res.json({ message: `User role updated to '${role}'`, result });
+        } catch (error) {
+          res
+            .status(500)
+            .json({ message: "Server error", error: error.message });
+        }
       }
-
-      try {
-        const result = await usersCollection.updateOne(
-          { _id: new ObjectId(id) },
-          { $set: { role } }
-        );
-
-        res.json({ message: `User role updated to '${role}'`, result });
-      } catch (error) {
-        res.status(500).json({ message: "Server error", error: error.message });
-      }
-    });
-
-
-
+    );
 
     // parcels
     app.post("/parcels", async (req, res) => {
@@ -153,10 +157,21 @@ async function run() {
       res.send(parcels);
     });
 
-    app.get("/parcels", async (req, res) => {
-      const userEmail = req.query.email;
+    app.get("/parcels", verifyFireBaseToken, async (req, res) => {
+      const { userEmail, payment_status, delivery_status } = req.query;
 
-      const query = userEmail ? { email: userEmail } : {};
+      let query = {};
+
+      if (userEmail) {
+        query = { email: userEmail };
+      }
+      if (payment_status) {
+        query.payment_status = payment_status;
+      }
+      if (delivery_status) {
+        query.delivery_status = delivery_status;
+      }
+      // const query = userEmail ? { email: userEmail } : {};
 
       try {
         const parcels = await parcelCollection
@@ -192,18 +207,71 @@ async function run() {
       res.send(result);
     });
 
-    // GET all riders with status 'pending'
-    app.get("/riders/pending", verifyFireBaseToken , verifyAdmin, async (req, res) => {
+    app.post("/riders/assign-rider", async (req, res) => {
+      const { parcelId, riderId, riderEmail } = req.body;
+
+      if (!parcelId || !riderId || !riderEmail) {
+        return res
+          .status(400)
+          .send({ message: "Parcel ID, Rider ID, and Email are required" });
+      }
+
       try {
-        const pendingRiders = await ridersCollection
-          .find({ status: "pending" })
-          .toArray();
-        res.send(pendingRiders);
-      } catch (error) {
-        console.error("Error fetching pending riders:", error);
-        res.status(500).send({ message: "Internal server error" });
+        const result = await parcelCollection.updateOne(
+          { _id: new ObjectId(parcelId) },
+          {
+            $set: {
+              assignedRider: riderId,
+              assignedRiderEmail: riderEmail, 
+              delivery_status: "assigned",
+            },
+          }
+        );
+
+        if (result.modifiedCount === 0) {
+          return res
+            .status(404)
+            .send({ message: "Parcel not found or not updated" });
+        }
+
+        res.send({ message: "Rider assigned successfully", result });
+      } catch (err) {
+        console.error("Failed to assign rider:", err);
+        res
+          .status(500)
+          .send({ message: "Internal server error", error: err.message });
       }
     });
+
+    app.get("/riders/available", async (req, res) => {
+      const { district } = req.query;
+
+      const riders = await ridersCollection
+        .find({
+          district: { $regex: `^${district}$`, $options: "i" },
+        })
+        .toArray();
+
+      res.send(riders);
+    });
+
+    // GET all riders with status 'pending'
+    app.get(
+      "/riders/pending",
+      verifyFireBaseToken,
+      verifyAdmin,
+      async (req, res) => {
+        try {
+          const pendingRiders = await ridersCollection
+            .find({ status: "pending" })
+            .toArray();
+          res.send(pendingRiders);
+        } catch (error) {
+          console.error("Error fetching pending riders:", error);
+          res.status(500).send({ message: "Internal server error" });
+        }
+      }
+    );
 
     app.patch("/riders/:id/status", async (req, res) => {
       const { id } = req.params;
@@ -230,12 +298,17 @@ async function run() {
     });
 
     // GET active riders
-    app.get("/riders/active", verifyFireBaseToken, verifyAdmin, async (req, res) => {
-      const result = await ridersCollection
-        .find({ status: "approved" })
-        .toArray();
-      res.send(result);
-    });
+    app.get(
+      "/riders/active",
+      verifyFireBaseToken,
+      verifyAdmin,
+      async (req, res) => {
+        const result = await ridersCollection
+          .find({ status: "approved" })
+          .toArray();
+        res.send(result);
+      }
+    );
 
     // tracking
     app.post("/tracking", async (req, res) => {
