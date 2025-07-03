@@ -235,10 +235,18 @@ async function run() {
           .send({ message: "Status and email are required" });
       }
 
+      const updatedDoc = { delivery_status: status };
+
+      if (status === "picked_up") {
+        updatedDoc.picked_at = new Date().toISOString();
+      } else if (status === "delivered") {
+        updatedDoc.delivered_at = new Date().toISOString();
+      }
+
       try {
         const result = await parcelCollection.updateOne(
           { _id: new ObjectId(parcelId), assignedRiderEmail: email },
-          { $set: { delivery_status: status } }
+          updatedDoc
         );
 
         if (result.matchedCount === 0) {
