@@ -71,6 +71,17 @@ async function run() {
       next();
     };
 
+    const verifyRider = async (req, res, next) => {
+      const email = req.decoded.email;
+      const query = { email };
+      const user = await usersCollection.findOne(query);
+
+      if (!user || user.role !== "rider")
+        return res.status(403).send({ message: "forbidden access" });
+
+      next();
+    };
+
     // users
     app.post("/users", async (req, res) => {
       const email = req.body.email;
@@ -147,6 +158,7 @@ async function run() {
       parcel.delivery_status = "not_collected";
       parcel.payment_status = "unpaid";
       parcel.creation_date = new Date().toISOString();
+      parcel.cashed_out = false;
 
       const result = await parcelCollection.insertOne(parcel);
       res.send(result);
@@ -186,6 +198,65 @@ async function run() {
       }
     });
 
+    app.get(
+      "/riders/parcels/:email",
+      verifyFireBaseToken,
+      verifyRider,
+      async (req, res) => {
+        const riderEmail = req.params.email;
+
+        if (!riderEmail) {
+          return res.status(400).send({ message: "Rider email is required" });
+        }
+
+        try {
+          const pendingParcels = await parcelCollection
+            .find({
+              assignedRiderEmail: riderEmail,
+              delivery_status: { $in: ["assigned", "picked_up"] },
+            })
+            .toArray();
+
+          res.send(pendingParcels);
+        } catch (error) {
+          console.error("Error fetching pending parcels:", error);
+          res.status(500).send({ message: "Internal server error" });
+        }
+      }
+    );
+
+    app.patch("/parcels/update-status/:id", async (req, res) => {
+      const parcelId = req.params.id;
+      const { status, email } = req.body;
+
+      if (!status || !email) {
+        return res
+          .status(400)
+          .send({ message: "Status and email are required" });
+      }
+
+      try {
+        const result = await parcelCollection.updateOne(
+          { _id: new ObjectId(parcelId), assignedRiderEmail: email },
+          { $set: { delivery_status: status } }
+        );
+
+        if (result.matchedCount === 0) {
+          return res
+            .status(404)
+            .send({ message: "Parcel not found or access denied" });
+        }
+
+        res.send({
+          message: `Parcel marked as ${status}`,
+          modifiedCount: result.modifiedCount,
+        });
+      } catch (error) {
+        console.error("Error updating delivery status:", error);
+        res.status(500).send({ message: "Internal server error" });
+      }
+    });
+
     app.get("/parcels/:id", async (req, res) => {
       const id = req.params.id;
       const parcel = await parcelCollection.findOne({ _id: new ObjectId(id) });
@@ -204,7 +275,71 @@ async function run() {
     app.post("/riders", async (req, res) => {
       const rider = req.body;
       const result = await ridersCollection.insertOne(rider);
+
+      // Update user role immediately
+      await usersCollection.updateOne(
+        { email: rider.email },
+        { $set: { role: "rider" } }
+      );
+
       res.send(result);
+    });
+
+    app.get(
+      "/riders/completed-parcels/:email",
+      verifyFireBaseToken,
+      verifyRider,
+      async (req, res) => {
+        const riderEmail = req.params.email;
+
+        if (!riderEmail) {
+          return res.status(400).send({ message: "Rider email is required" });
+        }
+
+        try {
+          const completedParcels = await parcelCollection
+            .find({
+              assignedRiderEmail: riderEmail,
+              delivery_status: "delivered",
+            })
+            .toArray();
+
+          res.send(completedParcels);
+        } catch (error) {
+          console.error("Error fetching completed parcels:", error);
+          res.status(500).send({ message: "Internal server error" });
+        }
+      }
+    );
+
+    app.patch("/riders/cashout/:parcelId", async (req, res) => {
+      const parcelId = req.params.parcelId;
+      const { email } = req.body;
+
+      if (!email) {
+        return res.status(400).send({ message: "Rider email is required" });
+      }
+
+      try {
+        const result = await parcelCollection.updateOne(
+          { _id: new ObjectId(parcelId), assignedRiderEmail: email },
+          { $set: { cashed_out: true, cashedOutAt: new Date() } }
+        );
+
+        if (result.matchedCount === 0) {
+          return res
+            .status(404)
+            .send({ message: "Parcel not found or access denied" });
+        }
+
+        res.send({
+          message: "Cash-out successful",
+          modifiedCount: result.modifiedCount,
+        });
+      } catch (error) {
+        console.error("Cash-out error:", error);
+        res.status(500).send({ message: "Internal server error" });
+      }
     });
 
     app.post("/riders/assign-rider", async (req, res) => {
@@ -222,7 +357,7 @@ async function run() {
           {
             $set: {
               assignedRider: riderId,
-              assignedRiderEmail: riderEmail, 
+              assignedRiderEmail: riderEmail,
               delivery_status: "assigned",
             },
           }
