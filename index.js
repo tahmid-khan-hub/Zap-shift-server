@@ -40,6 +40,7 @@ async function run() {
     const parcelCollection = client.db("parcelDB").collection("parcels");
     const paymentsCollection = client.db("parcelDB").collection("payments");
     const ridersCollection = client.db("parcelDB").collection("riders");
+    const trackingsCollection = client.db("parcelDB").collection("tracking");
 
     const verifyFireBaseToken = async (req, res, next) => {
       const authHeader = req.headers.authorization;
@@ -154,7 +155,7 @@ async function run() {
       const cost = parcel.type === "document" ? 50 : 100;
       parcel.cost = cost;
 
-      parcel.tracking_id = `TRK-${Date.now()}`;
+      parcel.tracking_id = parcel.tracking_id || `TRK-${Date.now()}`;
       parcel.delivery_status = "not_collected";
       parcel.payment_status = "unpaid";
       parcel.creation_date = new Date().toISOString();
@@ -465,8 +466,46 @@ async function run() {
         time: new Date(),
       };
 
-      const result = await trackingCollection.insertOne(newEntry);
+      const result = await trackingsCollection.insertOne(newEntry);
       res.send(result);
+    });
+
+    app.post("/trackings", async (req, res) => {
+      const update = req.body;
+
+      try {
+        update.timestamp = new Date(); // 🕒 add server-side timestamp
+
+        const result = await trackingsCollection.insertOne(update);
+
+        res.send({
+          message: "Tracking event recorded",
+          insertedId: result.insertedId,
+        });
+      } catch (error) {
+        console.error("Error saving tracking event:", error);
+        res.status(500).send({ message: "Internal server error" });
+      }
+    });
+
+    app.get("/tracking/:trackingId", async (req, res) => {
+      const { trackingId } = req.params;
+
+      try {
+        const history = await trackingsCollection
+          .find({ tracking_id: trackingId })
+          .sort({ timestamp: 1 }) // chronological order
+          .toArray();
+
+        if (!history.length) {
+          return res.status(404).send({ message: "No tracking history found" });
+        }
+
+        res.send(history);
+      } catch (error) {
+        console.error("Tracking fetch error:", error);
+        res.status(500).send({ message: "Internal server error" });
+      }
     });
 
     // payments
